@@ -105,6 +105,15 @@ jobs:
           cp "$apk" OpenPhoneUse.apk
           sha256sum OpenPhoneUse.apk > OpenPhoneUse.apk.sha256
 
+      - name: Upload the signed APK artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenPhoneUse-v${{ env.VERSION }}-apk
+          path: |
+            OpenPhoneUse.apk
+            OpenPhoneUse.apk.sha256
+          if-no-files-found: error
+
       - name: Draft the release
         if: inputs.check_only != true
         run: |
