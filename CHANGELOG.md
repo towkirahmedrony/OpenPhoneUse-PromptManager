@@ -4,6 +4,10 @@ All notable changes to OpenPhoneUse are listed here, newest first. The format fo
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-21
+
+- **Repeated actions on long lists keep going.** A sequence that taps the same control over and over — the Add friend button on each row of Facebook's suggestions, an Invite button in a list, any page of identical buttons — stopped after one or two rows, because a control whose label appears many times could not be found again once the tapped row changed or the list shifted. A tap now follows the row at the same position among identical controls, so the sequence walks down the list instead of stopping, and it still stops when no such control is left. Typing keeps the stricter rule and never guesses between identical fields.
+
 ## [0.0.8] - 2026-11-21
 
 - **System Prompt Manager.** A new settings page holds the instructions the AI follows. Create, edit, duplicate, enable, disable, delete and preview prompts; choose which one is active; set a default; and restore the original. Long, multiline prompts are stored exactly as written. Three profiles (General Assistant, Facebook Automation, Custom Agent) keep their own prompts and active choice, and you can add more profiles. Prompts are saved on the phone only, survive restarts and provider switches, and can be imported from or exported to a `.txt` file.
