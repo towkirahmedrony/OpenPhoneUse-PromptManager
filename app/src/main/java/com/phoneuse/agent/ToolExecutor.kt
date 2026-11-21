@@ -715,8 +715,14 @@ class ToolExecutor(
                     val fresh = refresh(afterTool = acted, baseline = working)
                     val index = stepArgs.int("index")
                     if (index != null) {
-                        // Indices refer to the screen the model saw; find that same element now.
-                        val now = if (fresh.packageName == current.packageName) relocate(index, current, fresh) else null
+                        // Indices refer to the screen the model saw; find that same element now. A tap on a list of
+                        // identical controls takes the one at the same position, so repeating the step walks down
+                        // the list instead of dying on the second row.
+                        val now = if (fresh.packageName == current.packageName) {
+                            relocate(index, current, fresh, sameKind = tool == "tap" || tool == "long_press")
+                        } else {
+                            null
+                        }
                         if (now == null) {
                             lines += "$n. $tool: STOPPED: screen changed at step $n"
                             finalScreen = fresh
@@ -773,17 +779,28 @@ class ToolExecutor(
     }
 
     /**
-     * The index in [fresh] of the element [index] of [old]: same window, child path and label;
-     * failing that, a label that names exactly one element on both screens. Null if it is gone.
+     * The index in [fresh] of the element [index] of [old]: same window, child path and label; failing that, a
+     * label that names exactly one element on both screens; for a tap ([sameKind]), a control whose label several
+     * elements share (a list of identical buttons) is taken at the same reading-order position among them, so a
+     * list that shifted after the previous step still gives the control the model meant (the next row's). Null if
+     * it is gone.
      */
-    private fun relocate(index: Int, old: CompressedScreen, fresh: CompressedScreen): Int? {
+    private fun relocate(index: Int, old: CompressedScreen, fresh: CompressedScreen, sameKind: Boolean = false): Int? {
         val node = element(index, old)
         val label = old.fullLabels[index]
         fresh.elements.entries
             .firstOrNull { (i, n) -> n.windowId == node.windowId && n.path == node.path && fresh.fullLabels[i] == label }
             ?.let { return it.key }
-        if (label.isNullOrBlank() || old.fullLabels.values.count { it == label } != 1) return null
-        return fresh.fullLabels.entries.singleOrNull { it.value == label }?.key
+        if (label.isNullOrBlank()) return null
+        if (old.fullLabels.values.count { it == label } == 1) {
+            return fresh.fullLabels.entries.singleOrNull { it.value == label }?.key
+        }
+        // Typing or other steps keep the old, strict rule: an ambiguous label is never a safe guess for them.
+        if (!sameKind) return null
+        val k = kind(index, old)
+        val ordinal = old.elements.keys.filter { kind(it, old) == k }.indexOf(index)
+        val same = fresh.elements.keys.filter { kind(it, fresh) == k }
+        return if (ordinal >= 0 && ordinal < same.size) same[ordinal] else null
     }
 
     // ---- non-step tools -----------------------------------------------------------------------

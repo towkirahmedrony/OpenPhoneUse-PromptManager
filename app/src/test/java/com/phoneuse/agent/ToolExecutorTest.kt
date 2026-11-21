@@ -540,6 +540,71 @@ class ToolExecutorTest {
         assertEquals(1, dev.calls.count { it.startsWith("tap") })
     }
 
+    /** [count] rows that each hold the same "Add friend" button; [requested] rows show the button after its tap. */
+    private fun rowsScreen(count: Int, requested: Set<Int> = emptySet()): ScreenSnapshot =
+        ScreenSnapshot(
+            "com.app", 1080, 2400,
+            (0 until count).map { i -> at(if (i in requested) "Requested" else "Add friend", i + 1, 100 + i * 60) },
+        )
+
+    /** Which rows of [rowsScreen] were tapped, read back from the recorded tap positions (row height 60, first at 130). */
+    private fun tappedRows(dev: FakeDeviceController): Set<Int> = dev.calls
+        .filter { it.startsWith("tap(") }
+        .mapNotNull { it.removePrefix("tap(").removeSuffix(")").split(",").getOrNull(1)?.toIntOrNull() }
+        .map { (it - 130) / 60 }
+        .toSet()
+
+    @Test fun batchWalksDownAListOfIdenticalButtons() = runTest {
+        // Five rows with the same "Add friend" button; a tap turns that row's button into "Requested", as a
+        // suggestion list does. Only one of them can be the element the model named, so every later step must
+        // find the next identical control instead of dying on a stale index (the old behaviour stopped at step 2).
+        val seen = rowsScreen(5)
+        val dev = FakeDeviceController(listOf(seen))
+        dev.snapshotHook = { rowsScreen(5, tappedRows(dev)) }
+        val ex = ToolExecutor(dev, FakeUserGate())
+        val actions = (1..3).joinToString(",") { """{"tool":"tap","args":{"index":1}}""" }
+        val r = ex.execute(call("batch", """{"actions":[$actions]}"""), screenOf(seen))
+        assertTrue(r.output, r.output.startsWith("1. tap: OK\n2. tap: OK\n3. tap: OK"))
+        assertEquals(
+            listOf("tap(200,130)", "tap(200,190)", "tap(200,250)"),
+            dev.calls.filter { it.startsWith("tap") },
+        )
+    }
+
+    @Test fun batchStopsWhenIdenticalControlsRunOut() = runTest {
+        // Two rows, three steps: the last one finds no row left and stops with the screen, never a third tap.
+        val seen = rowsScreen(2)
+        val dev = FakeDeviceController(listOf(seen))
+        dev.snapshotHook = { rowsScreen(2, tappedRows(dev)) }
+        val ex = ToolExecutor(dev, FakeUserGate())
+        val actions = (1..3).joinToString(",") { """{"tool":"tap","args":{"index":1}}""" }
+        val r = ex.execute(call("batch", """{"actions":[$actions]}"""), screenOf(seen))
+        assertTrue(r.output, r.output.startsWith("1. tap: OK\n2. tap: OK\n3. tap: STOPPED: screen changed at step 3"))
+        assertEquals(2, dev.calls.count { it.startsWith("tap") })
+    }
+
+    @Test fun batchDoesNotGuessAtAnAmbiguousFieldForTyping() = runTest {
+        // Two fields share a label; after the first is filled its row moves, so the index no longer names it. A
+        // type_text step must stop rather than type into the other field, unlike a repeated tap on a list.
+        val seen = ScreenSnapshot("com.app", 1080, 2400, listOf(editable("검색", 100), editable("검색", 200)))
+        val after = ScreenSnapshot(
+            "com.app", 1080, 2400,
+            listOf(button("x", 100, editable = true), editable("검색", 300).copy(path = listOf(9))),
+        )
+        val (dev, _, ex) = setup(seen, after)
+        val r = ex.execute(
+            call(
+                "batch",
+                """{"actions":[{"tool":"type_text","args":{"index":1,"text":"x"}},""" +
+                    """{"tool":"type_text","args":{"index":2,"text":"y"}}]}""",
+            ),
+            screenOf(seen),
+        )
+        assertTrue(r.output, r.output.contains("2. type_text: STOPPED: screen changed at step 2"))
+        assertEquals(1, dev.setTextNodes.size)
+        assertEquals("검색", dev.setTextNodes.single().text)
+    }
+
     @Test fun genericConfirmUsesDialogContext() = runTest {
         val dialog = ScreenSnapshot(
             "com.gallery", 1080, 2400,
