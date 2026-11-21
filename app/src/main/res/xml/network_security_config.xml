@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Everything stays https-only, as before this file. The one exception is plain http to this phone itself (and the
+  emulator's host, 10.0.2.2), for an "OpenAI-compatible" server running locally such as Ollama or LM Studio.
+  Keep the hosts in step with CompatibleEndpoints.CLEARTEXT_HOSTS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

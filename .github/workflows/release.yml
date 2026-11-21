@@ -1,0 +1,114 @@
+name: Release
+
+# Builds, tests and signs the release APK from main and creates a draft release for the version in
+# app/build.gradle.kts, with that version's CHANGELOG section as its notes. The maintainer reads the draft and
+# publishes it, which starts "Release check". Only people with write access can start this workflow, and pull
+# requests never see these secrets.
+#
+# Secrets: RELEASE_KEYSTORE_BASE64 (the keystore file, base64), RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS,
+# RELEASE_KEY_PASSWORD, and RELEASE_STORE_TYPE (PKCS12 or JKS; optional, PKCS12 for the key made with openssl).
+# See "Releasing" in CONTRIBUTING.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: Only build, sign and check; create no release (to test the secrets)
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # SHA-256 of the release signing certificate, as in release-check.yml.
+      EXPECTED_CERT: 62a862b8c129e63c7081f84d7b93541aa1fef87c557ba1294e7554b39799236d
+      CHECK_ONLY: ${{ inputs.check_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Version, tag and notes
+        run: |
+          version="$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts)"
+          tag="v$version"
+          test -n "$version"
+          if [ "$CHECK_ONLY" != true ] && gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::A release $tag already exists. Raise versionName and versionCode first."
+            exit 1
+          fi
+          # The CHANGELOG section of this version, without its heading.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ "$CHECK_ONLY" != true ] && ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section \"## [$version]\". Rename [Unreleased] to it first."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1.6.4.1.6.4.1
+        with:
+          cache-read-only: true
+
+      - name: Unpack the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::The RELEASE_KEYSTORE_BASE64 secret is not set."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Unit tests and signed release build
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_STORE_TYPE: ${{ secrets.RELEASE_STORE_TYPE }}
+        run: ./gradlew testDebugUnitTest lintRelease assembleRelease --console=plain
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Check the signature and version
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          "$tools/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt" 2>&1
+          cat "$RUNNER_TEMP/certs.txt"
+          cert="$(grep -m1 -oE 'certificate SHA-256 digest: [0-9a-f]{64}' "$RUNNER_TEMP/certs.txt" | grep -oE '[0-9a-f]{64}' || true)"
+          echo "certificate: $cert"
+          test "$cert" = "$EXPECTED_CERT"
+          built="$("$tools/aapt2" dump badging "$apk" | sed -n "s/^package: .* versionName='\([^']*\)'.*/\1/p")"
+          test "$built" = "$VERSION"
+          cp "$apk" OpenPhoneUse.apk
+          sha256sum OpenPhoneUse.apk > OpenPhoneUse.apk.sha256
+
+      - name: Draft the release
+        if: inputs.check_only != true
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "OpenPhoneUse $TAG" --notes-file "$RUNNER_TEMP/notes.md" \
+            OpenPhoneUse.apk OpenPhoneUse.apk.sha256
+          echo "Draft $TAG created. Read it on the Releases page, then publish it." >> "$GITHUB_STEP_SUMMARY"

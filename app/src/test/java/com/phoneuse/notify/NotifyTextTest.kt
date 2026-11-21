@@ -1,0 +1,89 @@
+package com.phoneuse.notify
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class NotifyTextTest {
+    @Test
+    fun stripsEmphasisHeadingsAndQuotes() {
+        val md = """
+            ## 결과
+            **가장 싼 곳**은 *쿠팡* 이에요. ~~비쌈~~ __굵게__
+            > 핵심: 29,900원
+        """.trimIndent()
+        assertEquals("결과\n가장 싼 곳은 쿠팡 이에요. 비쌈 굵게\n핵심: 29,900원", NotifyText.plain(md))
+    }
+
+    @Test
+    fun tablesBecomeRowsWithoutPipes() {
+        val md = """
+            | 상품 | 가격 |
+            |---|:---:|
+            | 이어폰 | **29,900원** |
+            | 케이스 | 9,900원 |
+        """.trimIndent()
+        assertEquals("상품 · 가격\n이어폰 · 29,900원\n케이스 · 9,900원", NotifyText.plain(md))
+    }
+
+    @Test
+    fun listsKeepBulletsAndNumbers() {
+        val md = "- 첫째\n* 둘째\n1. 셋째"
+        assertEquals("• 첫째\n• 둘째\n1. 셋째", NotifyText.plain(md))
+    }
+
+    @Test
+    fun linksCodeAndRules() {
+        val md = "[네이버 지도](https://map.naver.com) 에서 `**raw**` 확인\n\n---\n\n\n끝"
+        assertEquals("네이버 지도 에서 **raw** 확인\n\n끝", NotifyText.plain(md))
+    }
+
+    @Test
+    fun underscoresInsideWordsStay() {
+        assertEquals("file_name_v2.txt 저장", NotifyText.plain("file_name_v2.txt 저장"))
+        assertEquals("강조 저장", NotifyText.plain("_강조_ 저장"))
+    }
+
+    @Test
+    fun fencedCodeKeepsItsLines() {
+        val md = "보세요\n```kotlin\nval a = 1 * 2 * 3\n```\n끝"
+        assertEquals("보세요\nval a = 1 * 2 * 3\n끝", NotifyText.plain(md))
+    }
+
+    @Test
+    fun firstLineSkipsBlankLines() {
+        assertEquals("오늘은 맑아요", NotifyText.firstLine("\n\n  오늘은 맑아요\n내일은 비"))
+        assertEquals("", NotifyText.firstLine("   "))
+    }
+
+    @Test
+    fun clipCutsAtAWordAndMarksIt() {
+        assertEquals("짧은 글", NotifyText.clip("짧은 글", 20))
+        val cut = NotifyText.clip("하나 둘 셋 넷 다섯 여섯 일곱 여덟", 12)
+        assertTrue(cut, cut.length <= 12 && cut.endsWith("…"))
+        assertEquals("하나 둘 셋 넷…", cut)
+        // No space late enough: a hard cut.
+        assertEquals("abcdefghi…", NotifyText.clip("abcdefghijklmnop", 10))
+    }
+
+    @Test
+    fun titleFallsBackAndDropsMarks() {
+        assertEquals("OpenPhoneUse", NotifyText.title(null, "OpenPhoneUse"))
+        assertEquals("OpenPhoneUse", NotifyText.title("  ", "OpenPhoneUse"))
+        assertEquals("택배 조회", NotifyText.title("**택배 조회**", "x"))
+        assertEquals(NotifyText.TITLE_CHARS, NotifyText.title("가".repeat(80), "x").length)
+    }
+
+    @Test
+    fun nulPlaceholderInTextDoesNotCrash() {
+        assertEquals("a5b", NotifyText.plain("a\u00005\u0000b"))
+        assertEquals("x 7y", NotifyText.plain("`x` \u00007\u0000y"))
+    }
+
+    @Test
+    fun linksKeepTheirTextEvenWithParenthesesInTheUrl() {
+        assertEquals("맑아요 (example.com)", NotifyText.plain("맑아요 ([example.com](https://example.com/a?utm_source=openai))"))
+        assertEquals("서울 끝", NotifyText.plain("[서울](https://en.wikipedia.org/wiki/Seoul_(city)) 끝"))
+        assertEquals("사진 끝", NotifyText.plain("![사진](https://a.example/b_(1).png) 끝"))
+    }
+}
